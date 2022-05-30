@@ -1,0 +1,123 @@
+main:
+  params: [main_input]
+  steps:
+    - get_callback:
+        call: create_qc_callback
+        args:
+          db_url: ${main_input.db_url}
+          order_id: ${main_input.customer_id}
+        result: qc_url_details
+    - documents_collection:
+        call: http.get
+        args:
+          url: https://www.docs.com/endpoint
+          body:
+            some_val: "What is the status"
+        result: doc_result
+    - start_qc:
+        call: QC
+        args:
+          qc_input: ${main_input}
+          qc_callback_details: qc_url_details
+          doc_status: doc_result
+        result: qc_result
+
+QC:
+  params: [qc_input, qc_callback_details, doc_status]
+  steps:
+    - await_qc_update:
+        call: events.await_callback
+        args:
+          callback: ${qc_callback_details}
+          timeout: 3600
+        result: qc_update
+    - update:
+        switch:
+          - condition: ${qc_update.http_request.body.qc_status == "QC_STATUS_REJECTED"}
+            steps:
+              - assign_new_status:
+                  assign:
+                    - qc_input.state.qc_status: "QC_STATUS_SALES_NEED_TO_FIX"
+              - update_rejected:
+                  call: update_state
+                  args:
+                    input: qc_input
+                    status: "QC_STATUS_SALES_NEED_TO_FIX"
+                  result: qc_out
+              - assign_result:
+                  assign:
+                    - qc_input: ${qc_out}
+            next: await_qc_update
+          - condition: ${qc_update.http_request.body.qc_status == "QC_STATUS_APPROVED" AND doc_status == DOC_STATUS_INCOMPLETE}
+            steps:
+              - assign_new_status:
+                assign:
+                  - qc_input.state.qc_status: "QC_STATUS_PRE-APPROVED"
+              - update_approved:
+                call: update_state
+                  args:
+                    input: qc_input
+                    status: "QC_STATUS_PRE-APPROVED"
+                  result: qc_out
+              - assign_result:
+                  assign:
+                    - qc_input: ${qc_out}
+            next: await_qc_update          -
+          - condition: ${qc_update.http_request.body.qc_status == "QC_STATUS_APPROVED" AND doc_status == DOC_STATUS_COMPLETE}
+            steps:
+              - assign_new_status:
+                assign:
+                  - qc_input.state.qc_status: "QC_STATUS_APPROVED"
+              - update_approved:
+                call: update_state
+                  args:
+                    input: qc_input
+                    status: "QC_STATUS_APPROVED"
+                  result: qc_out
+            return: qc_out
+
+
+create_qc_callback:
+  params: [db_url, order_id]
+  steps:
+    - create_qc_update_callback:
+        call: events.create_callback_endpoint
+        args:
+          http_callback_method: "POST"
+        result: qc_callback_details
+    - send_call_back_url_to_db:
+        call: http.post
+        args:
+          url: db_url # https://www.savetodb.com/endpoint
+          query:
+            order: order_id
+          body:
+            url: ${callback_details.url}
+        return: qc_callback_details
+
+update_state:
+  params: [input, status]
+  steps:
+    - update_order:
+        call: http.post
+          args:
+            url: https://www.updateorder.com/endpoint
+            body:
+              data: input
+              status: status
+          result: order_result
+    - assign_updated_order:
+        assign:
+          - input.order: ${order_result.order}
+    - update_item:
+        call: http.post
+          args:
+            url: https://www.updateorder.com/endpoint
+            body:
+              data: input
+              status: status
+          result: item_result
+    - assign_updated_item:
+        assign:
+          - input.item: ${item_result.item}
+        return: input
