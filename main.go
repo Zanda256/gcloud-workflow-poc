@@ -13,6 +13,5 @@ func main() {
 	router.POST("/orders/:order/qc/callback", handlers.StoreCallback)
 	router.POST("/orders/:order/qc", handlers.UpdateQc)
 
-
 	log.Fatal(http.ListenAndServe(":8080", router))
 }
